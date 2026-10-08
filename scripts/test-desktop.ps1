@@ -14,6 +14,38 @@ function Assert-Equal($Actual, $Expected, [string]$Message) {
     if ($Actual -ne $Expected) { throw "$Message (expected $Expected, got $Actual)" }
 }
 
+# Create a minimal ASAR fixture with an Electron pickle header.
+# The header is deliberately small, but valid for AsarHeaderHash.Compute.
+function Write-TestAsar([string]$Path, [string]$Payload) {
+    $json = '{"files":{}}'
+    $header = [Text.Encoding]::UTF8.GetBytes($json)
+    $padding = (4 - ($header.Length % 4)) % 4
+    $headerSize = $header.Length + $padding
+    $payloadBytes = [Text.Encoding]::UTF8.GetBytes($Payload)
+
+    $stream = [IO.File]::Create($Path)
+    try {
+        $writer = [IO.BinaryWriter]::new($stream)
+        $writer.Write([uint32]4)
+        $writer.Write([uint32]($headerSize + 8))
+        $writer.Write([uint32]($headerSize + 4))
+        $writer.Write([uint32]$header.Length)
+        $writer.Write($header)
+        if ($padding -gt 0) { $writer.Write([byte[]]::new($padding)) }
+        $writer.Write($payloadBytes)
+        $writer.Flush()
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Assert-FilesEqual([string]$ActualPath, [string]$ExpectedPath, [string]$Message) {
+    $actualHash = (Get-FileHash -LiteralPath $ActualPath -Algorithm SHA256).Hash
+    $expectedHash = (Get-FileHash -LiteralPath $ExpectedPath -Algorithm SHA256).Hash
+    Assert-Equal $actualHash $expectedHash $Message
+}
+
 $supervisedNamespace = 'WandEnhancer.Core.Patching.Strategies.Supervised'
 foreach ($typeName in 'MemoryFuseApplicator', 'ProcessInfo') {
     $type = $assembly.GetType("$supervisedNamespace.$typeName", $true)
@@ -68,7 +100,7 @@ try {
 
     $installArgument = [object[]]@([string]$install)
     Assert-Equal ($isPatched.Invoke($null, $installArgument)) $false 'Fresh installation'
-    [IO.File]::WriteAllText($backup, 'original archive')
+    Write-TestAsar $backup 'original archive'
     Assert-Equal ($isPatched.Invoke($null, $installArgument)) $false 'Incomplete backup'
     [IO.Directory]::CreateDirectory($unpackedBackup) | Out-Null
     [IO.File]::WriteAllText((Join-Path $unpackedBackup 'original.txt'), 'original unpacked')
@@ -88,11 +120,11 @@ try {
     $enhancer = [Activator]::CreateInstance($enhancerType, @($config, $logger))
     $rollback = $enhancerType.GetMethod('RollbackQuietly', $privateInstance)
 
-    [IO.File]::WriteAllText($asar, 'partial archive')
+    Write-TestAsar $asar 'partial archive'
     [IO.Directory]::CreateDirectory($unpacked) | Out-Null
     [IO.File]::WriteAllText((Join-Path $unpacked 'injected.txt'), 'partial injection')
     $rollback.Invoke($enhancer, $null) | Out-Null
-    Assert-Equal ([IO.File]::ReadAllText($asar)) 'original archive' 'Rollback archive'
+    Assert-FilesEqual $asar $backup 'Rollback archive'
     Assert-Equal ([IO.File]::ReadAllText((Join-Path $unpacked 'original.txt'))) 'original unpacked' 'Rollback unpacked files'
     Assert-Equal (Test-Path (Join-Path $unpacked 'injected.txt')) $false 'Rollback injection removal'
     Assert-Equal ($isPatched.Invoke($null, $installArgument)) $false 'Rolled-back installation'
