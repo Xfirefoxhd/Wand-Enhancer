@@ -113,6 +113,8 @@ try {
     $config = [Activator]::CreateInstance($assembly.GetType('WandEnhancer.Models.WeModConfig', $true))
     $config.RootDirectory = $install
     $config.ExecutableName = 'FixtureClient.exe'
+    # Create the fake application executable required by ASAR integrity restore.
+    [IO.File]::WriteAllBytes((Join-Path $install $config.ExecutableName), [Text.Encoding]::ASCII.GetBytes('fixture executable without integrity resource'))
     $config.BrandName = 'wand-test-' + [guid]::NewGuid().ToString('N')
     $logType = $assembly.GetType('WandEnhancer.Core.ELogType', $true)
     $loggerType = [Action``2].MakeGenericType([string], $logType)
