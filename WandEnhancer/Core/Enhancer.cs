@@ -7,7 +7,6 @@ using AsarSharp;
 using WandEnhancer.Core.Patching.Content;
 using WandEnhancer.Core.Patching.Shared;
 using WandEnhancer.Core.Patching.Strategies;
-using WandEnhancer.Core.Patching.Strategies.Static;
 using WandEnhancer.Models;
 using WandEnhancer.Utils;
 
@@ -31,8 +30,6 @@ namespace WandEnhancer.Core
         private readonly string _backupPath;
         private readonly string _unpackedPath;
         private readonly string _unpackedBackupPath;
-        private readonly string _resourcesPath;
-        private readonly PatchRunLog _runLog = new PatchRunLog();
 
         /// <summary>For <see cref="Restore"/> requiring install paths but no patch selection.</summary>
         public Enhancer(WeModConfig weModConfig, Action<string, ELogType> logger)
@@ -43,15 +40,10 @@ namespace WandEnhancer.Core
         public Enhancer(WeModConfig weModConfig, Action<string, ELogType> logger, PatchConfig config)
         {
             _weModConfig = weModConfig;
-            _logger = (message, type) =>
-            {
-                _runLog.Add(message, type);
-                logger(message, type);
-            };
+            _logger = logger;
             _config = config;
             _strategy = config != null ? StrategyFactory.Create(config.Strategy) : null;
 
-            _resourcesPath = Path.Combine(weModConfig.RootDirectory, ResourcesDirectoryName);
             _asarPath = Path.Combine(weModConfig.RootDirectory, ResourcesDirectoryName, AppAsarFileName);
             _unpackedPath = Path.Combine(weModConfig.RootDirectory, ResourcesDirectoryName, AppAsarUnpackedDirectoryName);
             _backupPath = Path.Combine(weModConfig.RootDirectory, ResourcesDirectoryName, AppAsarBackupFileName);
@@ -111,8 +103,6 @@ namespace WandEnhancer.Core
 
         public void Patch()
         {
-            _runLog.Begin($"WandEnhancer {Constants.Version} build {Constants.Build} | {_config.Strategy} method | " +
-                          $"patches {string.Join(",", _config.PatchTypes)} | {_weModConfig.RootDirectory}");
             ProcessTerminator.TryKillProcess(_weModConfig.BrandName);
             string markerPath = Path.Combine(Path.GetDirectoryName(_asarPath), IncompletePatchMarkerFileName);
             File.WriteAllText(markerPath, string.Empty);
@@ -155,7 +145,6 @@ namespace WandEnhancer.Core
 
             // Start from a pristine executable to not inherit a broken signature from prior static patches.
             DiskFusePatch.Remove(_weModConfig.ExecutablePath, _logger);
-            AsarIntegrityResourcePatch.Restore(_weModConfig.ExecutablePath, _asarPath, _logger);
 
             // Never leave a patched archive behind without its launcher.
             try
@@ -187,20 +176,6 @@ namespace WandEnhancer.Core
             }
 
             _logger("[ENHANCER] Done!", ELogType.Success);
-            SaveRunLog();
-        }
-
-        /// <summary>Best-effort: a log that cannot be written must not fail a finished patch.</summary>
-        private void SaveRunLog()
-        {
-            try
-            {
-                _runLog.Save(_resourcesPath);
-            }
-            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
-            {
-                _logger($"[ENHANCER] Could not save {PatchRunLog.FileName}: {e.Message}", ELogType.Warn);
-            }
         }
 
         private static void CreateBackupFile(string source, string destination)
@@ -315,7 +290,6 @@ namespace WandEnhancer.Core
                 // Undo on-disk fuse and launcher deployment to prevent a tampered unlaunchable Wand.
                 LauncherDeployment.Restore(_weModConfig);
                 DiskFusePatch.Remove(_weModConfig.ExecutablePath, _logger);
-                AsarIntegrityResourcePatch.Restore(_weModConfig.ExecutablePath, _asarPath, _logger);
 
                 _logger("[ENHANCER] Patch failed - the original Wand files were restored.", ELogType.Warn);
             }
@@ -343,8 +317,6 @@ namespace WandEnhancer.Core
 
             AsarSharp.Utils.Extensions.CopyDirectory(_unpackedBackupPath, _unpackedPath);
 
-            PatchRunLog.Delete(_resourcesPath);
-
             // Clean up legacy proxy DLL
             var proxyDllPath = Path.Combine(_weModConfig.RootDirectory, ProxyDllFileName);
             if (File.Exists(proxyDllPath))
@@ -355,7 +327,6 @@ namespace WandEnhancer.Core
             // Undo all footprints at once: launcher stub and on-disk fuse.
             LauncherDeployment.Restore(_weModConfig);
             DiskFusePatch.Remove(_weModConfig.ExecutablePath, _logger);
-            AsarIntegrityResourcePatch.Restore(_weModConfig.ExecutablePath, _asarPath, _logger);
 
             string squirrelRoot = SquirrelRoot;
             foreach (var leftover in new[]
